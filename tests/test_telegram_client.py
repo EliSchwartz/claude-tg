@@ -133,3 +133,31 @@ async def test_poll_updates_yields_text_and_callbacks(fake):
     assert got[1] == CallbackUpdate(
         from_user_id=42, message_id=20, data="pref:approve", callback_query_id="cbq1",
     )
+
+
+async def test_poll_updates_recovers_from_transient_getupdates_failure(fake):
+    f, base = fake
+    call_count = {"n": 0}
+    async def flaky(_body):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise Exception("transient")
+        # Second call: return a real update.
+        return [{
+            "update_id": 1,
+            "message": {
+                "message_id": 10, "from": {"id": 42},
+                "chat": {"id": -100}, "message_thread_id": 50,
+                "text": "after blip",
+            },
+        }]
+    f.set_handler("getUpdates", flaky)
+    # Override the client's default retry/backoff to speed up the test
+    client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
+
+    from claude_tg.telegram_client import TextUpdate
+    got = []
+    async for event in client.poll_updates(stop_after=1):
+        got.append(event)
+    assert isinstance(got[0], TextUpdate)
+    assert got[0].text == "after blip"
