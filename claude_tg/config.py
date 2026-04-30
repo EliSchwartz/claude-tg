@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,7 @@ def _require(raw: dict[str, Any], key: str, type_: type) -> Any:
     if key not in raw:
         raise ConfigError(f"missing required field: {key}")
     val = raw[key]
-    if not isinstance(val, type_):
+    if not isinstance(val, type_) or (type_ is int and isinstance(val, bool)):
         raise ConfigError(f"{key} must be {type_.__name__}, got {type(val).__name__}")
     return val
 
@@ -48,7 +48,7 @@ def load_config(path: Path) -> Config:
     token = _require(raw, "telegram_bot_token", str)
     group = _require(raw, "telegram_supergroup_id", int)
     users = _require(raw, "allowed_user_ids", list)
-    if not all(isinstance(u, int) for u in users):
+    if not all(isinstance(u, int) and not isinstance(u, bool) for u in users):
         raise ConfigError("allowed_user_ids must be a list of integers")
 
     failure = raw.get("on_telegram_failure", "deny")

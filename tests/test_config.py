@@ -51,3 +51,25 @@ def test_missing_file_raises(tmp_path):
     with pytest.raises(ConfigError) as e:
         load_config(tmp_path / "nope.toml")
     assert "not found" in str(e.value).lower()
+
+
+def test_rejects_bool_for_supergroup_id(tmp_path):
+    p = write_config(tmp_path, """
+        telegram_bot_token = "x"
+        telegram_supergroup_id = true
+        allowed_user_ids = [1]
+    """)
+    with pytest.raises(ConfigError) as e:
+        load_config(p)
+    assert "telegram_supergroup_id" in str(e.value)
+
+
+def test_rejects_bool_in_allowed_user_ids(tmp_path):
+    p = write_config(tmp_path, """
+        telegram_bot_token = "x"
+        telegram_supergroup_id = -1
+        allowed_user_ids = [true, 1]
+    """)
+    with pytest.raises(ConfigError) as e:
+        load_config(p)
+    assert "allowed_user_ids" in str(e.value)
