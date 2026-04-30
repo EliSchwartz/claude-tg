@@ -40,6 +40,20 @@ class TelegramClient:
                 if not data.get("ok"):
                     raise RuntimeError(f"Telegram error: {data}")
                 return data["result"]
+            except httpx.HTTPStatusError as e:
+                last_err = e
+                if attempt == 4:
+                    break
+                retry_after = None
+                try:
+                    body = e.response.json()
+                    retry_after = body.get("parameters", {}).get("retry_after")
+                except Exception:
+                    pass
+                sleep_s = float(retry_after) if retry_after else min(delay, 30.0)
+                await asyncio.sleep(sleep_s)
+                if not retry_after:
+                    delay *= 2
             except Exception as e:
                 last_err = e
                 if attempt == 4:
@@ -66,6 +80,8 @@ class TelegramClient:
         return int(result["message_thread_id"])
 
     async def post_message(self, topic_id: int, text: str) -> list[int]:
+        if not text:
+            return []
         ids: list[int] = []
         for i in range(0, len(text), MAX_CHUNK):
             chunk = text[i : i + MAX_CHUNK]
@@ -76,9 +92,6 @@ class TelegramClient:
                 text=chunk,
             )
             ids.append(int(result["message_id"]))
-        if not ids:
-            # empty text: send a single empty-ish placeholder? Skip instead.
-            return []
         return ids
 
     async def post_approval(
@@ -91,9 +104,11 @@ class TelegramClient:
         """Post an approval card with an inline keyboard.
 
         callback_prefix is embedded in the callback_data so the poller can
-        route callbacks to the right pending request.
+        route callbacks to the right pending request. Text is sent as plain
+        text (no parse_mode) because tool input previews may contain
+        arbitrary characters including backticks.
         """
-        text = f"⚠️ Approve tool: {tool_name}\n\n```\n{preview}\n```"
+        text = f"⚠️ Approve tool: {tool_name}\n\n{preview}"
         keyboard = {
             "inline_keyboard": [[
                 {"text": "✅ Approve", "callback_data": f"{callback_prefix}:approve"},
@@ -106,7 +121,6 @@ class TelegramClient:
             chat_id=self._supergroup_id,
             message_thread_id=topic_id,
             text=text,
-            parse_mode="Markdown",
             reply_markup=keyboard,
         )
         return int(result["message_id"])

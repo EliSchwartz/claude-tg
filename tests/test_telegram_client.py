@@ -1,4 +1,5 @@
 import pytest
+from aiohttp import web
 
 from claude_tg.telegram_client import TelegramClient
 from tests.fake_telegram import FakeTelegram
@@ -36,7 +37,6 @@ async def test_post_message_chunks_long_text(fake):
 async def test_react_degrades_on_failure(fake):
     f, base = fake
     async def fail(_body):
-        from aiohttp import web
         raise web.HTTPForbidden()
     f.set_handler("setMessageReaction", fail)
     client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
@@ -47,7 +47,6 @@ async def test_react_degrades_on_failure(fake):
 async def test_set_topic_name_degrades_on_failure(fake):
     f, base = fake
     async def fail(_body):
-        from aiohttp import web
         raise web.HTTPForbidden()
     f.set_handler("editForumTopic", fail)
     client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
@@ -57,9 +56,43 @@ async def test_set_topic_name_degrades_on_failure(fake):
 async def test_create_topic_fails_fatally(fake):
     f, base = fake
     async def fail(_body):
-        from aiohttp import web
         raise web.HTTPForbidden()
     f.set_handler("createForumTopic", fail)
     client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
     with pytest.raises(Exception):
         await client.create_topic("x")
+
+
+async def test_post_message_empty_string_is_noop(fake):
+    f, base = fake
+    client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
+    result = await client.post_message(topic_id=50, text="")
+    assert result == []
+    assert f.calls == []
+
+
+async def test_post_approval_has_callback_data_with_expected_suffixes(fake):
+    f, base = fake
+    client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
+    await client.post_approval(
+        topic_id=50, tool_name="Bash", preview="ls", callback_prefix="mid42",
+    )
+    assert f.calls[0][0] == "sendMessage"
+    keyboard = f.calls[0][1]["reply_markup"]["inline_keyboard"][0]
+    datas = [btn["callback_data"] for btn in keyboard]
+    assert "mid42:approve" in datas
+    assert "mid42:deny" in datas
+    assert "mid42:deny_tell" in datas
+
+
+async def test_post_approval_handles_backticks_in_preview(fake):
+    f, base = fake
+    client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
+    # preview with triple backticks - must NOT use parse_mode=Markdown
+    await client.post_approval(
+        topic_id=50, tool_name="Edit",
+        preview="```python\ncode\n```",
+        callback_prefix="x",
+    )
+    # ensure parse_mode is not set (plain text)
+    assert "parse_mode" not in f.calls[0][1]
