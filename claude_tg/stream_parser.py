@@ -22,12 +22,7 @@ class TurnEnd:
     pass
 
 
-@dataclass(frozen=True)
-class SessionEnd:
-    exit_code: int
-
-
-Event = Union[AssistantText, ToolUse, TurnEnd, SessionEnd]
+Event = Union[AssistantText, ToolUse, TurnEnd]
 
 
 def parse_events(lines: Iterable[str]) -> Iterator[Event]:

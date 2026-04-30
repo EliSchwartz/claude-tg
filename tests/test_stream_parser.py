@@ -1,5 +1,5 @@
 from claude_tg.stream_parser import (
-    AssistantText, ToolUse, TurnEnd, SessionEnd, parse_events,
+    AssistantText, ToolUse, TurnEnd, parse_events,
 )
 
 
