@@ -16,6 +16,12 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "claude-tg" / "config.toml"
 
 
 def main() -> None:
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = argparse.ArgumentParser(
         prog="claude-tg",
         description="Wrap `claude` with Telegram remote control.",

@@ -33,5 +33,8 @@ phone.
 - The wrapper must stay running for the session's lifetime. Closing the
   terminal ends the session.
 - Approvals and clarifications go to Telegram; bot rate limits apply.
+- **Only one active session per bot token.** Telegram's Bot API allows exactly one active long-poll per token; running two `claude-tg` sessions concurrently will cause updates to be lost between them. For multiple concurrent sessions, register separate bots and use separate config files.
+- **How to get your supergroup id**: create the supergroup, add the bot, then in Telegram send `/start` in the group. Use a tool like `@raw_data_bot` or run:
+    `curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[-1].message.chat.id'`
 - See `docs/superpowers/specs/2026-04-30-claude-tg-remote-control-design.md`
   for the full design and its security caveats.

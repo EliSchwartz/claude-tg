@@ -31,29 +31,11 @@ class PreToolUseRequest:
         return await self._future
 
 
-@dataclass
-class StopRequest:
-    last_assistant_text: str
-    _future: asyncio.Future = field(default=None, init=False)  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        self._future = asyncio.get_running_loop().create_future()
-
-    def resolve(self, *, user_reply: str) -> None:
-        if self._future.done():
-            return
-        self._future.set_result({"user_reply": user_reply})
-
-    async def wait(self) -> dict:
-        return await self._future
-
-
 class HookServer:
     def __init__(self, socket_path: str) -> None:
         self._path = socket_path
         self._server: asyncio.AbstractServer | None = None
         self._pre_tool_use: asyncio.Queue[PreToolUseRequest] = asyncio.Queue()
-        self._stop: asyncio.Queue[StopRequest] = asyncio.Queue()
 
     async def start(self) -> None:
         if os.path.exists(self._path):
@@ -71,9 +53,6 @@ class HookServer:
     async def next_pre_tool_use(self) -> PreToolUseRequest:
         return await self._pre_tool_use.get()
 
-    async def next_stop(self) -> StopRequest:
-        return await self._stop.get()
-
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             line = await reader.readline()
@@ -90,10 +69,6 @@ class HookServer:
                 )
                 await self._pre_tool_use.put(req)
                 result = await req.wait()
-            elif endpoint == "stop":
-                req2 = StopRequest(last_assistant_text=payload.get("last_assistant_text", ""))
-                await self._stop.put(req2)
-                result = await req2.wait()
             else:
                 result = {"error": f"unknown endpoint {endpoint}"}
 

@@ -238,6 +238,9 @@ class Session:
         async for update in self._tg.poll_updates():
             if update.from_user_id not in self.config.allowed_user_ids:
                 continue
+            # Ignore text updates from other topics (e.g. other concurrent sessions).
+            if isinstance(update, TextUpdate) and update.topic_id != self._topic_id:
+                continue
             if isinstance(update, TextUpdate):
                 text = update.text.strip()
                 if text == "/stop":
@@ -338,9 +341,14 @@ class Session:
                 await self._tg.close_topic(self._topic_id)
             except Exception as e:
                 log.warning("shutdown telegram notify failed: %s", e)
+        if self._tg:
             await self._tg.aclose()
         if self._hooks:
             await self._hooks.stop()
+        # Clean up per-session payload dump dir if we created one.
+        dump_dir = Path("/tmp") / f"claude-tg-{self._session_id}"
+        if dump_dir.exists():
+            shutil.rmtree(dump_dir, ignore_errors=True)
         if self._temp_dir is not None:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None

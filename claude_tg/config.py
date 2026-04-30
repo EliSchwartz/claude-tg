@@ -18,6 +18,8 @@ class ConfigError(Exception):
 _VALID_FAILURE_MODES = ("deny", "approve", "ask_cli")
 
 
+# NOTE: reply_timeout_sec and on_telegram_failure are accepted for forward compatibility
+# but not yet consumed by Session. They are reserved for future use (see spec).
 @dataclass(frozen=True)
 class Config:
     telegram_bot_token: str
