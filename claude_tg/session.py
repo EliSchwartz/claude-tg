@@ -80,13 +80,15 @@ class Session:
             stream_task = asyncio.create_task(self._read_stream())
             hooks_task = asyncio.create_task(self._serve_hooks())
             tg_task = asyncio.create_task(self._poll_telegram())
+            heartbeat_task = asyncio.create_task(self._heartbeat())
             try:
                 await stream_task
             finally:
-                for t in (hooks_task, tg_task):
+                for t in (hooks_task, tg_task, heartbeat_task):
                     t.cancel()
                 await asyncio.gather(
-                    hooks_task, tg_task, return_exceptions=True,
+                    hooks_task, tg_task, heartbeat_task,
+                    return_exceptions=True,
                 )
         finally:
             await self._shutdown()
@@ -186,7 +188,14 @@ class Session:
                 req = await self._hooks.next_pre_tool_use()
             except asyncio.CancelledError:
                 return
-            preview = json.dumps(req.tool_input)[:500]
+            preview = json.dumps(req.tool_input)
+            if len(preview) > 500:
+                dump_dir = Path("/tmp") / f"claude-tg-{self._session_id}"
+                dump_dir.mkdir(exist_ok=True)
+                idx = len(list(dump_dir.glob("tool-*.txt")))
+                dump_path = dump_dir / f"tool-{idx}.txt"
+                dump_path.write_text(preview)
+                preview = preview[:500] + f"\n... truncated; full payload: {dump_path}"
             mid = await self._tg.post_approval(
                 topic_id=self._topic_id,
                 tool_name=req.tool_name,
@@ -196,6 +205,27 @@ class Session:
                 assert self._current_approval is None, "overlapping approvals not supported"
                 self._state.on_pre_tool_use(approval_message_id=mid)
                 self._current_approval = req
+
+    async def _heartbeat(self) -> None:
+        assert self._tg and self._topic_id
+        import time
+        last_activity = time.time()
+        prev_state = self._state.state
+        while True:
+            await asyncio.sleep(max(self.config.heartbeat_interval_sec, 1))
+            async with self._state_lock:
+                cur = self._state.state
+                if cur == State.ENDED:
+                    return
+                if cur != prev_state:
+                    last_activity = time.time()
+                    prev_state = cur
+            icon = "\U0001f7e2"
+            if time.time() - last_activity > self.config.idle_threshold_sec:
+                icon = "\U0001f7e1"
+            await self._tg.set_topic_name(
+                self._topic_id, f"session-{self._session_id} {icon}"
+            )
 
     async def _poll_telegram(self) -> None:
         assert self._tg
@@ -224,6 +254,14 @@ class Session:
                     continue
                 async with self._state_lock:
                     action = self._state.on_callback(mid_int, kind)
+                    if (
+                        kind == "deny_tell"
+                        and self._state.state == State.WAITING_DENY_REASON
+                    ):
+                        await self._tg.edit_message_text(
+                            mid_int,
+                            "✏️ send a short reason or instruction (or /cancel)",
+                        )
                     await self._apply_action(action, update)
 
     async def _apply_action(

@@ -73,6 +73,9 @@ class FakeTelegram:
         if method == "editMessageReplyMarkup":
             return web.json_response({"ok": True, "result": True})
 
+        if method == "editMessageText":
+            return web.json_response({"ok": True, "result": True})
+
         if method == "answerCallbackQuery":
             return web.json_response({"ok": True, "result": True})
 

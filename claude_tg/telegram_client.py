@@ -160,6 +160,14 @@ class TelegramClient:
             reaction=[{"type": "emoji", "emoji": emoji}],
         )
 
+    async def edit_message_text(self, message_id: int, text: str) -> None:
+        await self._call_soft(
+            "editMessageText",
+            chat_id=self._supergroup_id,
+            message_id=message_id,
+            text=text,
+        )
+
     async def set_topic_name(self, topic_id: int, name: str) -> None:
         await self._call_soft(
             "editForumTopic",
