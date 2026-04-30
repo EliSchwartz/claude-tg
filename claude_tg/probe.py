@@ -4,11 +4,14 @@ Validates the four Claude Code protocol assumptions before we build the
 Telegram relay. Run via: python -m claude_tg.probe
 """
 
+# Note: every `claude` invocation below passes `--verbose` because Claude Code
+# 2.1.x requires `--verbose` when combining `--print` with
+# `--output-format stream-json`.
+
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -45,12 +48,17 @@ async def probe_1_multi_turn_stdin(claude_bin: str) -> tuple[bool, str]:
         proc.stdin.write(user_msg("say the word banana and nothing else"))
         await proc.stdin.drain()
 
+        # Track turn boundaries by `result` events. An `assistant` event must
+        # appear between sending a user message and the corresponding `result`
+        # for that turn to count as a real response.
+        results_seen = 0
+        assistant_since_last_result = False
         saw_first_response = False
         saw_second_response = False
-        second_sent = False
 
         async def read_loop():
-            nonlocal saw_first_response, saw_second_response, second_sent
+            nonlocal results_seen, assistant_since_last_result
+            nonlocal saw_first_response, saw_second_response
             while True:
                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=60)
                 if not line:
@@ -59,18 +67,20 @@ async def probe_1_multi_turn_stdin(claude_bin: str) -> tuple[bool, str]:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if ev.get("type") == "assistant":
-                    if not saw_first_response:
-                        saw_first_response = True
-                    elif not saw_second_response:
-                        saw_second_response = True
+                t = ev.get("type")
+                if t == "assistant":
+                    assistant_since_last_result = True
+                elif t == "result":
+                    results_seen += 1
+                    if results_seen == 1:
+                        saw_first_response = assistant_since_last_result
+                        assistant_since_last_result = False
+                        # First turn complete; send the second user message.
+                        proc.stdin.write(user_msg("now say apple and nothing else"))
+                        await proc.stdin.drain()
+                    elif results_seen == 2:
+                        saw_second_response = assistant_since_last_result
                         return
-                # End-of-turn signals: vary by version. Watch for "result" or similar.
-                if ev.get("type") == "result" and not second_sent:
-                    # Send second message
-                    proc.stdin.write(user_msg("now say apple and nothing else"))
-                    await proc.stdin.drain()
-                    second_sent = True
 
         await asyncio.wait_for(read_loop(), timeout=120)
         ok = saw_first_response and saw_second_response
@@ -186,6 +196,7 @@ async def probe_3_settings_precedence(claude_bin: str) -> tuple[bool, str]:
             }) + "\n"
             proc.stdin.write(msg.encode())
             await proc.stdin.drain()
+            proc.stdin.close()
             await asyncio.wait_for(proc.wait(), timeout=120)
         except asyncio.TimeoutError:
             proc.kill()
@@ -242,6 +253,7 @@ async def probe_4_hook_payload_shape(claude_bin: str) -> tuple[bool, str]:
             }) + "\n"
             proc.stdin.write(msg.encode())
             await proc.stdin.drain()
+            proc.stdin.close()
             await asyncio.wait_for(proc.wait(), timeout=120)
         except asyncio.TimeoutError:
             proc.kill()
