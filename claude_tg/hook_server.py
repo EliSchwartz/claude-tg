@@ -14,7 +14,10 @@ log = logging.getLogger("claude_tg.hook_server")
 class PreToolUseRequest:
     tool_name: str
     tool_input: dict
-    _future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
+    _future: asyncio.Future = field(default=None, init=False)  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self._future = asyncio.get_running_loop().create_future()
 
     def resolve(self, *, decision: str, reason: str | None = None) -> None:
         if self._future.done():
@@ -31,7 +34,10 @@ class PreToolUseRequest:
 @dataclass
 class StopRequest:
     last_assistant_text: str
-    _future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
+    _future: asyncio.Future = field(default=None, init=False)  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self._future = asyncio.get_running_loop().create_future()
 
     def resolve(self, *, user_reply: str) -> None:
         if self._future.done():
@@ -45,7 +51,7 @@ class StopRequest:
 class HookServer:
     def __init__(self, socket_path: str) -> None:
         self._path = socket_path
-        self._server: asyncio.base_events.Server | None = None
+        self._server: asyncio.AbstractServer | None = None
         self._pre_tool_use: asyncio.Queue[PreToolUseRequest] = asyncio.Queue()
         self._stop: asyncio.Queue[StopRequest] = asyncio.Queue()
 
