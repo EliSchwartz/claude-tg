@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -10,6 +11,22 @@ import httpx
 log = logging.getLogger("claude_tg.telegram")
 
 MAX_CHUNK = 4000  # Telegram's hard limit is 4096; leave headroom.
+
+
+@dataclass(frozen=True)
+class TextUpdate:
+    from_user_id: int
+    topic_id: int | None
+    message_id: int
+    text: str
+
+
+@dataclass(frozen=True)
+class CallbackUpdate:
+    from_user_id: int
+    message_id: int
+    data: str
+    callback_query_id: str
 
 
 class TelegramClient:
@@ -150,3 +167,42 @@ class TelegramClient:
 
     async def answer_callback(self, callback_query_id: str) -> None:
         await self._call_soft("answerCallbackQuery", callback_query_id=callback_query_id)
+
+    async def poll_updates(self, stop_after: int | None = None):
+        """Yield TextUpdate and CallbackUpdate events.
+
+        stop_after is a test hook: stop after yielding N events.
+        """
+        offset: int | None = None
+        yielded = 0
+        while True:
+            params: dict[str, Any] = {"timeout": 25}
+            if offset is not None:
+                params["offset"] = offset
+            updates = await self._call("getUpdates", **params)
+            for u in updates or []:
+                offset = int(u["update_id"]) + 1
+                if "message" in u:
+                    m = u["message"]
+                    if "text" not in m:
+                        continue
+                    yield TextUpdate(
+                        from_user_id=int(m.get("from", {}).get("id", 0)),
+                        topic_id=m.get("message_thread_id"),
+                        message_id=int(m["message_id"]),
+                        text=m["text"],
+                    )
+                    yielded += 1
+                elif "callback_query" in u:
+                    cb = u["callback_query"]
+                    yield CallbackUpdate(
+                        from_user_id=int(cb.get("from", {}).get("id", 0)),
+                        message_id=int(cb["message"]["message_id"]),
+                        data=cb.get("data", ""),
+                        callback_query_id=cb["id"],
+                    )
+                    yielded += 1
+                if stop_after is not None and yielded >= stop_after:
+                    return
+            if stop_after is not None and yielded >= stop_after:
+                return

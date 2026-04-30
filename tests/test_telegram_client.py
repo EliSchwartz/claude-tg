@@ -96,3 +96,40 @@ async def test_post_approval_handles_backticks_in_preview(fake):
     )
     # ensure parse_mode is not set (plain text)
     assert "parse_mode" not in f.calls[0][1]
+
+
+async def test_poll_updates_yields_text_and_callbacks(fake):
+    f, base = fake
+    # Push two updates: one text message, one callback query.
+    f.push_update({
+        "update_id": 1,
+        "message": {
+            "message_id": 10,
+            "from": {"id": 42},
+            "chat": {"id": -100},
+            "message_thread_id": 50,
+            "text": "hello",
+        },
+    })
+    f.push_update({
+        "update_id": 2,
+        "callback_query": {
+            "id": "cbq1",
+            "from": {"id": 42},
+            "data": "pref:approve",
+            "message": {"message_id": 20, "chat": {"id": -100}},
+        },
+    })
+    client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
+
+    got = []
+    async for event in client.poll_updates(stop_after=2):
+        got.append(event)
+
+    from claude_tg.telegram_client import TextUpdate, CallbackUpdate
+    assert got[0] == TextUpdate(
+        from_user_id=42, topic_id=50, message_id=10, text="hello",
+    )
+    assert got[1] == CallbackUpdate(
+        from_user_id=42, message_id=20, data="pref:approve", callback_query_id="cbq1",
+    )
