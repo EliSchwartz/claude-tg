@@ -5,6 +5,9 @@ from enum import Enum
 from typing import Union
 
 
+DEFAULT_DENY_REASON = "denied by user"
+
+
 class State(Enum):
     RUNNING = "running"
     WAITING_TOOL_APPROVAL = "waiting_tool_approval"
@@ -87,7 +90,8 @@ class SessionState:
             self.pending = None
             return ResolveReply(text=text)
         if self.state == State.WAITING_DENY_REASON:
-            # clear pending after caller resolves the original approval request
+            # approval was already resolved when deny_tell was clicked;
+            # this carries the reason back to Claude on the next turn
             self.state = State.RUNNING
             self.pending = None
             return ResolveDenyReason(reason=text)
@@ -108,7 +112,7 @@ class SessionState:
             if kind == "deny":
                 self.state = State.RUNNING
                 self.pending = None
-                return ResolveApproval(decision="deny", reason="denied by user")
+                return ResolveApproval(decision="deny", reason=DEFAULT_DENY_REASON)
             if kind == "deny_tell":
                 self.state = State.WAITING_DENY_REASON
                 self.pending = DenyReasonPending(
@@ -125,5 +129,5 @@ class SessionState:
         if self.state == State.WAITING_DENY_REASON:
             self.state = State.RUNNING
             self.pending = None
-            return ResolveApproval(decision="deny", reason="denied by user")
+            return ResolveApproval(decision="deny", reason=DEFAULT_DENY_REASON)
         return Reject(message="nothing to cancel; use /stop to end the session")

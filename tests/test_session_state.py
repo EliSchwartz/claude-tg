@@ -105,3 +105,37 @@ def test_ended_ignores_everything():
     assert s.state == State.ENDED
     assert isinstance(s.on_text(1, "hi"), Ignore)
     assert isinstance(s.on_callback(100, "approve"), Ignore)
+
+
+def test_unknown_callback_kind_is_ignored():
+    s = SessionState()
+    s.on_pre_tool_use(approval_message_id=100)
+    action = s.on_callback(approval_message_id=100, kind="bogus")
+    assert isinstance(action, Ignore)
+    assert s.state == State.WAITING_TOOL_APPROVAL
+
+
+def test_turn_end_is_noop_outside_running():
+    s = SessionState()
+    s.on_pre_tool_use(approval_message_id=100)
+    assert s.state == State.WAITING_TOOL_APPROVAL
+    s.on_turn_end()
+    assert s.state == State.WAITING_TOOL_APPROVAL  # unchanged
+
+
+def test_cancel_in_waiting_user_reply_is_rejected():
+    s = SessionState()
+    s.on_turn_end()
+    assert s.state == State.WAITING_USER_REPLY
+    action = s.on_cancel()
+    assert isinstance(action, Reject)
+    assert s.state == State.WAITING_USER_REPLY  # unchanged
+
+
+def test_cancel_in_ended_is_rejected():
+    s = SessionState()
+    s.on_end()
+    action = s.on_cancel()
+    # ENDED should never emit actions that cause side effects; Reject is acceptable
+    # because the orchestrator will just ignore the state machine's output anyway.
+    assert isinstance(action, (Reject, Ignore))
