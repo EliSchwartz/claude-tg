@@ -212,3 +212,14 @@ async def test_deny_tell_flow(fake_tg, tmp_path):
     assert session.exit_code == 0
     # Verify editMessageText was called (the "send a reason" prompt)
     assert any(c[0] == "editMessageText" for c in f.calls)
+
+
+async def test_cli_exits_with_config_error_for_missing_config(tmp_path):
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "claude_tg", "hi",
+        "--config", str(tmp_path / "missing.toml"),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode == 2
+    assert b"config" in stderr.lower()
