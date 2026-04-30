@@ -74,15 +74,19 @@ async def test_post_message_empty_string_is_noop(fake):
 async def test_post_approval_has_callback_data_with_expected_suffixes(fake):
     f, base = fake
     client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
-    await client.post_approval(
-        topic_id=50, tool_name="Bash", preview="ls", callback_prefix="mid42",
+    mid = await client.post_approval(
+        topic_id=50, tool_name="Bash", preview="ls",
     )
+    # First call: sendMessage with placeholder keyboard.
     assert f.calls[0][0] == "sendMessage"
-    keyboard = f.calls[0][1]["reply_markup"]["inline_keyboard"][0]
+    # Second call: editMessageReplyMarkup with real callback_data keyed by mid.
+    assert f.calls[1][0] == "editMessageReplyMarkup"
+    assert f.calls[1][1]["message_id"] == mid
+    keyboard = f.calls[1][1]["reply_markup"]["inline_keyboard"][0]
     datas = [btn["callback_data"] for btn in keyboard]
-    assert "mid42:approve" in datas
-    assert "mid42:deny" in datas
-    assert "mid42:deny_tell" in datas
+    assert f"{mid}:approve" in datas
+    assert f"{mid}:deny" in datas
+    assert f"{mid}:deny_tell" in datas
 
 
 async def test_post_approval_handles_backticks_in_preview(fake):
@@ -92,7 +96,6 @@ async def test_post_approval_handles_backticks_in_preview(fake):
     await client.post_approval(
         topic_id=50, tool_name="Edit",
         preview="```python\ncode\n```",
-        callback_prefix="x",
     )
     # ensure parse_mode is not set (plain text)
     assert "parse_mode" not in f.calls[0][1]

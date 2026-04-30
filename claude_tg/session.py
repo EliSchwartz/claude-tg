@@ -19,7 +19,7 @@ from claude_tg.session_state import (
     SessionState, State,
 )
 from claude_tg.stream_parser import (
-    AssistantText, Event, ToolUse, TurnEnd, parse_events,
+    AssistantText, ToolUse, TurnEnd, parse_events,
 )
 from claude_tg.telegram_client import (
     CallbackUpdate, TelegramClient, TextUpdate,
@@ -53,6 +53,7 @@ class Session:
         self._topic_id: int | None = None
         self._session_id = secrets.token_hex(3)
         self._current_approval: PreToolUseRequest | None = None
+        self._temp_dir: Path | None = None
 
     async def run(self) -> None:
         self._tg = TelegramClient(
@@ -93,6 +94,7 @@ class Session:
     async def _spawn_claude(self) -> None:
         # Build temp settings file with hook config
         td = Path(tempfile.mkdtemp(prefix=f"claude-tg-{self._session_id}-"))
+        self._temp_dir = td
         settings_path = td / "settings.json"
         hook_cmd = f"{shutil.which('claude-tg-hook') or sys.executable + ' -m claude_tg.hook_script'} {self.socket_path} pre_tool_use"
         settings_path.write_text(json.dumps({
@@ -189,10 +191,9 @@ class Session:
                 topic_id=self._topic_id,
                 tool_name=req.tool_name,
                 preview=preview,
-                callback_prefix=str(0),  # placeholder; filled below
             )
-            # Re-post with correct callback prefix (or just use mid now that we have it).
             async with self._state_lock:
+                assert self._current_approval is None, "overlapping approvals not supported"
                 self._state.on_pre_tool_use(approval_message_id=mid)
                 self._current_approval = req
 
@@ -201,24 +202,27 @@ class Session:
         async for update in self._tg.poll_updates():
             if update.from_user_id not in self.config.allowed_user_ids:
                 continue
-            async with self._state_lock:
-                if isinstance(update, TextUpdate):
-                    text = update.text.strip()
+            if isinstance(update, TextUpdate):
+                text = update.text.strip()
+                if text == "/stop":
+                    # Do NOT hold the state lock while waiting for the process
+                    # to exit; _read_stream may need the lock to flush events.
+                    await self._stop_gracefully()
+                    return
+                async with self._state_lock:
                     if text == "/cancel":
                         action = self._state.on_cancel()
-                    elif text == "/stop":
-                        await self._stop_gracefully()
-                        return
                     else:
                         action = self._state.on_text(update.from_user_id, text)
                     await self._apply_action(action, update)
-                elif isinstance(update, CallbackUpdate):
-                    await self._tg.answer_callback(update.callback_query_id)
-                    mid, _, kind = update.data.partition(":")
-                    try:
-                        mid_int = int(mid)
-                    except ValueError:
-                        continue
+            elif isinstance(update, CallbackUpdate):
+                await self._tg.answer_callback(update.callback_query_id)
+                mid, _, kind = update.data.partition(":")
+                try:
+                    mid_int = int(mid)
+                except ValueError:
+                    continue
+                async with self._state_lock:
                     action = self._state.on_callback(mid_int, kind)
                     await self._apply_action(action, update)
 
@@ -287,3 +291,6 @@ class Session:
             await self._tg.aclose()
         if self._hooks:
             await self._hooks.stop()
+        if self._temp_dir is not None:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None

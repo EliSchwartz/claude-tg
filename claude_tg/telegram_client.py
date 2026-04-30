@@ -116,31 +116,41 @@ class TelegramClient:
         topic_id: int,
         tool_name: str,
         preview: str,
-        callback_prefix: str,
     ) -> int:
-        """Post an approval card with an inline keyboard.
+        """Post an approval card with an inline keyboard whose callback_data
+        uses the returned message_id as the prefix. This guarantees callbacks
+        can be routed back to the right pending request.
 
-        callback_prefix is embedded in the callback_data so the poller can
-        route callbacks to the right pending request. Text is sent as plain
-        text (no parse_mode) because tool input previews may contain
-        arbitrary characters including backticks.
+        Text is sent as plain text (no parse_mode) because tool input previews
+        may contain arbitrary characters including backticks.
         """
+        # Post with placeholder buttons (no real callback_data yet); get the
+        # real message_id.
+        placeholder_kb = {"inline_keyboard": [[
+            {"text": "⏳", "callback_data": "placeholder"},
+        ]]}
         text = f"⚠️ Approve tool: {tool_name}\n\n{preview}"
-        keyboard = {
-            "inline_keyboard": [[
-                {"text": "✅ Approve", "callback_data": f"{callback_prefix}:approve"},
-                {"text": "❌ Deny",    "callback_data": f"{callback_prefix}:deny"},
-                {"text": "✏️ Deny+tell","callback_data": f"{callback_prefix}:deny_tell"},
-            ]]
-        }
         result = await self._call(
             "sendMessage",
             chat_id=self._supergroup_id,
             message_thread_id=topic_id,
             text=text,
-            reply_markup=keyboard,
+            reply_markup=placeholder_kb,
         )
-        return int(result["message_id"])
+        message_id = int(result["message_id"])
+        # Now set the real buttons with callback_data keyed on message_id.
+        real_kb = {"inline_keyboard": [[
+            {"text": "✅ Approve", "callback_data": f"{message_id}:approve"},
+            {"text": "❌ Deny",    "callback_data": f"{message_id}:deny"},
+            {"text": "✏️ Deny+tell","callback_data": f"{message_id}:deny_tell"},
+        ]]}
+        await self._call_soft(
+            "editMessageReplyMarkup",
+            chat_id=self._supergroup_id,
+            message_id=message_id,
+            reply_markup=real_kb,
+        )
+        return message_id
 
     async def react(self, message_id: int, emoji: str) -> None:
         await self._call_soft(

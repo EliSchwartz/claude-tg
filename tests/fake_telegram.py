@@ -70,6 +70,12 @@ class FakeTelegram:
         if method == "setMessageReaction":
             return web.json_response({"ok": True, "result": True})
 
+        if method == "editMessageReplyMarkup":
+            return web.json_response({"ok": True, "result": True})
+
+        if method == "answerCallbackQuery":
+            return web.json_response({"ok": True, "result": True})
+
         if method == "editForumTopic":
             return web.json_response({"ok": True, "result": True})
 
