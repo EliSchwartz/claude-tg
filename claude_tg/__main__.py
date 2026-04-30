@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -41,6 +40,7 @@ def main() -> None:
         print("claude binary not found on PATH", file=sys.stderr)
         sys.exit(2)
 
+    # initial_prompt is delivered to claude via stream-json, not via argv.
     argv = [claude_bin] + passthrough
     session = Session(
         config=cfg,
@@ -52,6 +52,7 @@ def main() -> None:
         asyncio.run(session.run())
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
     sys.exit(session.exit_code or 0)
 
 
