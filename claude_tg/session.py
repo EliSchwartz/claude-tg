@@ -9,6 +9,7 @@ import shutil
 import signal
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +55,10 @@ class Session:
         self._session_id = secrets.token_hex(3)
         self._current_approval: PreToolUseRequest | None = None
         self._temp_dir: Path | None = None
+        self._last_activity_ts: float = 0.0
+
+    def _bump_activity(self) -> None:
+        self._last_activity_ts = time.time()
 
     async def run(self) -> None:
         self._tg = TelegramClient(
@@ -77,6 +82,7 @@ class Session:
             # Run the three coroutines concurrently. When the stream reader
             # exits (Claude closed stdout), cancel the other two so run()
             # returns.
+            self._bump_activity()
             stream_task = asyncio.create_task(self._read_stream())
             hooks_task = asyncio.create_task(self._serve_hooks())
             tg_task = asyncio.create_task(self._poll_telegram())
@@ -157,6 +163,7 @@ class Session:
                 buffer.clear()
                 if text:
                     await self._tg.post_message(self._topic_id, text)
+                    self._bump_activity()
 
         async def process_events():
             async for line in lines():
@@ -171,10 +178,12 @@ class Session:
                         await self._tg.post_message(
                             self._topic_id, f"\U0001f527 Running {ev.name}: `{preview}`"
                         )
+                        self._bump_activity()
                     elif isinstance(ev, TurnEnd):
                         await flush_buffer()
                         async with self._state_lock:
                             self._state.on_turn_end()
+                        self._bump_activity()
 
         await process_events()
         # stdout closed -> Claude exited
@@ -191,10 +200,11 @@ class Session:
             preview = json.dumps(req.tool_input)
             if len(preview) > 500:
                 dump_dir = Path("/tmp") / f"claude-tg-{self._session_id}"
-                dump_dir.mkdir(exist_ok=True)
+                dump_dir.mkdir(exist_ok=True, mode=0o700)
                 idx = len(list(dump_dir.glob("tool-*.txt")))
                 dump_path = dump_dir / f"tool-{idx}.txt"
                 dump_path.write_text(preview)
+                os.chmod(dump_path, 0o600)
                 preview = preview[:500] + f"\n... truncated; full payload: {dump_path}"
             mid = await self._tg.post_approval(
                 topic_id=self._topic_id,
@@ -205,27 +215,23 @@ class Session:
                 assert self._current_approval is None, "overlapping approvals not supported"
                 self._state.on_pre_tool_use(approval_message_id=mid)
                 self._current_approval = req
+            self._bump_activity()
 
     async def _heartbeat(self) -> None:
         assert self._tg and self._topic_id
-        import time
-        last_activity = time.time()
-        prev_state = self._state.state
+        last_topic_name: str | None = None
         while True:
             await asyncio.sleep(max(self.config.heartbeat_interval_sec, 1))
             async with self._state_lock:
-                cur = self._state.state
-                if cur == State.ENDED:
+                if self._state.state == State.ENDED:
                     return
-                if cur != prev_state:
-                    last_activity = time.time()
-                    prev_state = cur
-            icon = "\U0001f7e2"
-            if time.time() - last_activity > self.config.idle_threshold_sec:
-                icon = "\U0001f7e1"
-            await self._tg.set_topic_name(
-                self._topic_id, f"session-{self._session_id} {icon}"
-            )
+                activity = self._last_activity_ts
+            idle = (time.time() - activity) > self.config.idle_threshold_sec
+            icon = "\U0001f7e1" if idle else "\U0001f7e2"
+            name = f"session-{self._session_id} {icon}"
+            if name != last_topic_name:
+                await self._tg.set_topic_name(self._topic_id, name)
+                last_topic_name = name
 
     async def _poll_telegram(self) -> None:
         assert self._tg
@@ -252,17 +258,20 @@ class Session:
                     mid_int = int(mid)
                 except ValueError:
                     continue
+                should_edit_for_deny_tell = False
                 async with self._state_lock:
                     action = self._state.on_callback(mid_int, kind)
                     if (
                         kind == "deny_tell"
                         and self._state.state == State.WAITING_DENY_REASON
                     ):
-                        await self._tg.edit_message_text(
-                            mid_int,
-                            "✏️ send a short reason or instruction (or /cancel)",
-                        )
+                        should_edit_for_deny_tell = True
                     await self._apply_action(action, update)
+                if should_edit_for_deny_tell:
+                    await self._tg.edit_message_text(
+                        mid_int,
+                        "✏️ send a short reason or instruction (or /cancel)",
+                    )
 
     async def _apply_action(
         self, action: Action,
@@ -276,16 +285,19 @@ class Session:
                 self._current_approval = None
             if isinstance(update, TextUpdate):
                 await self._tg.react(update.message_id, "✅")
+            self._bump_activity()
         elif isinstance(action, ResolveDenyReason):
             if self._current_approval:
                 self._current_approval.resolve(decision="deny", reason=action.reason)
                 self._current_approval = None
             if isinstance(update, TextUpdate):
                 await self._tg.react(update.message_id, "✅")
+            self._bump_activity()
         elif isinstance(action, ResolveReply):
             if isinstance(update, TextUpdate):
                 await self._tg.react(update.message_id, "✅")
             await self._write_user_message(action.text)
+            self._bump_activity()
         elif isinstance(action, Reject):
             await self._tg.post_message(self._topic_id, action.message)
         elif isinstance(action, Ignore):

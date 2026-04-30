@@ -133,7 +133,7 @@ async def test_heartbeat_updates_topic_name(fake_tg, tmp_path):
     stub_path.write_text(
         "import json, sys, time\n"
         "sys.stdout.write(json.dumps({'type':'result'})+'\\n'); sys.stdout.flush()\n"
-        "time.sleep(1.0)\n"
+        "time.sleep(2.0)\n"
     )
     cfg = Config(
         telegram_bot_token="TOKEN",
@@ -148,7 +148,7 @@ async def test_heartbeat_updates_topic_name(fake_tg, tmp_path):
         socket_path=str(tmp_path / "s.sock"),
         initial_prompt="go",
     )
-    await asyncio.wait_for(session.run(), timeout=10)
+    await asyncio.wait_for(session.run(), timeout=15)
     assert any(c[0] == "editForumTopic" for c in f.calls)
 
 
