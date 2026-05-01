@@ -9,11 +9,16 @@ writes response JSON on stdout. Defaults to deny if the socket is unreachable.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 
 
-SOCKET_TIMEOUT_SEC = 2.0
+# Short connect timeout: if the wrapper isn't listening, fail fast.
+CONNECT_TIMEOUT_SEC = 5.0
+# Long read timeout: once connected, the wrapper is waiting for a human to
+# tap Approve/Deny on Telegram. This can take a while. Overridable via env.
+READ_TIMEOUT_SEC = float(os.environ.get("CLAUDE_TG_HOOK_READ_TIMEOUT", "600"))
 
 
 def main() -> None:
@@ -30,9 +35,10 @@ def main() -> None:
     request = json.dumps({"endpoint": endpoint, "payload": payload}) + "\n"
 
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(SOCKET_TIMEOUT_SEC)
     try:
+        s.settimeout(CONNECT_TIMEOUT_SEC)
         s.connect(socket_path)
+        s.settimeout(READ_TIMEOUT_SEC)
         s.sendall(request.encode())
         s.shutdown(socket.SHUT_WR)
         buf = b""
