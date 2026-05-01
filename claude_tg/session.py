@@ -70,6 +70,20 @@ class Session:
 
         try:
             await self._hooks.start()
+            # Preflight: verify no other process is polling this bot token.
+            # Telegram's Bot API allows only one active long-poll per token;
+            # a second poller would get 409 Conflict on every getUpdates and
+            # the session would hang with no visible error.
+            try:
+                await self._tg._call("getUpdates", timeout=0)
+            except Exception as e:
+                if "409" in str(e):
+                    raise RuntimeError(
+                        "Another process is polling this bot token (Telegram 409 Conflict). "
+                        "Check for a stale `claude-tg` process: `pgrep -af claude-tg` and "
+                        "kill it before retrying."
+                    ) from e
+                raise
             cwd_name = Path.cwd().name or "cwd"
             self._topic_id = await self._tg.create_topic(
                 f"session-{self._session_id} / {cwd_name}"
@@ -287,18 +301,18 @@ class Session:
                 )
                 self._current_approval = None
             if isinstance(update, TextUpdate):
-                await self._tg.react(update.message_id, "✅")
+                await self._tg.react(update.message_id, "👍")
             self._bump_activity()
         elif isinstance(action, ResolveDenyReason):
             if self._current_approval:
                 self._current_approval.resolve(decision="deny", reason=action.reason)
                 self._current_approval = None
             if isinstance(update, TextUpdate):
-                await self._tg.react(update.message_id, "✅")
+                await self._tg.react(update.message_id, "👍")
             self._bump_activity()
         elif isinstance(action, ResolveReply):
             if isinstance(update, TextUpdate):
-                await self._tg.react(update.message_id, "✅")
+                await self._tg.react(update.message_id, "👍")
             await self._write_user_message(action.text)
             self._bump_activity()
         elif isinstance(action, Reject):
