@@ -16,8 +16,8 @@ from typing import Optional
 from claude_tg.config import Config
 from claude_tg.hook_server import HookServer, PreToolUseRequest
 from claude_tg.session_state import (
-    Action, Ignore, Reject, ResolveApproval, ResolveDenyReason, ResolveReply,
-    SessionState, State,
+    Action, ClearOrphanedApproval, DEFAULT_DENY_REASON, Ignore, Reject,
+    ResolveApproval, ResolveDenyReason, ResolveReply, SessionState, State,
 )
 from claude_tg.stream_parser import (
     AssistantText, ToolUse, TurnEnd, parse_events,
@@ -54,6 +54,12 @@ class Session:
         self._topic_id: int | None = None
         self._session_id = secrets.token_hex(3)
         self._current_approval: PreToolUseRequest | None = None
+        # Approval card's Telegram message_id and text body, kept so we can
+        # prepend a "✅ Approved" / "❌ Denied" status line and strip the
+        # buttons when the approval resolves. Cleared alongside
+        # _current_approval.
+        self._current_approval_mid: int | None = None
+        self._current_approval_text: str | None = None
         self._temp_dir: Path | None = None
         self._last_activity_ts: float = 0.0
 
@@ -196,7 +202,29 @@ class Session:
                     elif isinstance(ev, TurnEnd):
                         await flush_buffer()
                         async with self._state_lock:
-                            self._state.on_turn_end()
+                            signal = self._state.on_turn_end()
+                            orphan = self._current_approval
+                            if isinstance(signal, ClearOrphanedApproval):
+                                self._current_approval = None
+                        if isinstance(signal, ClearOrphanedApproval):
+                            # Claude moved on without the state machine
+                            # resolving the approval (hook timed out or was
+                            # killed). Tell the user, and unblock any hook
+                            # handler still waiting on the future.
+                            if orphan is not None:
+                                orphan.resolve(
+                                    decision="deny",
+                                    reason="turn ended without decision",
+                                )
+                            await self._edit_approval_card_to_decision(
+                                "⏱ Timed out — turn ended without decision"
+                            )
+                            await self._tg.post_message(
+                                self._topic_id,
+                                "⏱ the previous tool approval timed out "
+                                "before you responded — Claude moved on. "
+                                "Send your next instruction.",
+                            )
                         self._bump_activity()
 
         await process_events()
@@ -220,7 +248,7 @@ class Session:
                 dump_path.write_text(preview)
                 os.chmod(dump_path, 0o600)
                 preview = preview[:500] + f"\n... truncated; full payload: {dump_path}"
-            mid = await self._tg.post_approval(
+            mid, card_text = await self._tg.post_approval(
                 topic_id=self._topic_id,
                 tool_name=req.tool_name,
                 preview=preview,
@@ -229,6 +257,8 @@ class Session:
                 assert self._current_approval is None, "overlapping approvals not supported"
                 self._state.on_pre_tool_use(approval_message_id=mid)
                 self._current_approval = req
+                self._current_approval_mid = mid
+                self._current_approval_text = card_text
             self._bump_activity()
 
     async def _heartbeat(self) -> None:
@@ -288,7 +318,25 @@ class Session:
                     await self._tg.edit_message_text(
                         mid_int,
                         "✏️ send a short reason or instruction (or /cancel)",
+                        strip_keyboard=True,
                     )
+
+    async def _edit_approval_card_to_decision(self, status_line: str) -> None:
+        """Prepend a decision banner to the stored approval card text and
+        strip its inline keyboard. Does nothing if no approval card is
+        currently tracked (e.g., resolve called twice)."""
+        mid = self._current_approval_mid
+        body = self._current_approval_text
+        self._current_approval_mid = None
+        self._current_approval_text = None
+        if mid is None or body is None:
+            return
+        try:
+            await self._tg.edit_message_text(
+                mid, f"{status_line}\n{body}", strip_keyboard=True,
+            )
+        except Exception as e:
+            log.warning("failed to edit approval card: %s", e)
 
     async def _apply_action(
         self, action: Action,
@@ -300,6 +348,12 @@ class Session:
                     decision=action.decision, reason=action.reason
                 )
                 self._current_approval = None
+            if action.decision == "approve":
+                await self._edit_approval_card_to_decision("✅ Approved")
+            else:
+                reason = action.reason or ""
+                suffix = f': "{reason}"' if reason and reason != DEFAULT_DENY_REASON else ""
+                await self._edit_approval_card_to_decision(f"❌ Denied{suffix}")
             if isinstance(update, TextUpdate):
                 await self._tg.react(update.message_id, "👍")
             self._bump_activity()
@@ -307,6 +361,9 @@ class Session:
             if self._current_approval:
                 self._current_approval.resolve(decision="deny", reason=action.reason)
                 self._current_approval = None
+            await self._edit_approval_card_to_decision(
+                f'❌ Denied: "{action.reason}"'
+            )
             if isinstance(update, TextUpdate):
                 await self._tg.react(update.message_id, "👍")
             self._bump_activity()

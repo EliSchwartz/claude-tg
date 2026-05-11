@@ -61,7 +61,18 @@ class Ignore:
     pass
 
 
-Action = Union[ResolveApproval, ResolveDenyReason, ResolveReply, Reject, Ignore]
+@dataclass(frozen=True)
+class ClearOrphanedApproval:
+    # Claude proceeded (e.g., hook timed out or was killed) without a decision
+    # from the state machine. Orchestrator should resolve the dangling hook
+    # future with a deny, notify the user, and move on.
+    approval_message_id: int
+
+
+Action = Union[
+    ResolveApproval, ResolveDenyReason, ResolveReply, Reject, Ignore,
+    ClearOrphanedApproval,
+]
 
 
 class SessionState:
@@ -74,10 +85,22 @@ class SessionState:
         self.state = State.WAITING_TOOL_APPROVAL
         self.pending = ApprovalPending(approval_message_id=approval_message_id)
 
-    def on_turn_end(self) -> None:
+    def on_turn_end(self) -> ClearOrphanedApproval | None:
         if self.state == State.RUNNING:
             self.state = State.WAITING_USER_REPLY
             self.pending = ReplyPending()
+            return None
+        if self.state in (State.WAITING_TOOL_APPROVAL, State.WAITING_DENY_REASON):
+            # Claude emitted TurnEnd while we still believed an approval was
+            # pending — the hook must have resolved server-side (timed out or
+            # was killed). Surface the orphaned approval message so the
+            # orchestrator can clean it up, then move on to awaiting a reply.
+            assert isinstance(self.pending, (ApprovalPending, DenyReasonPending))
+            mid = self.pending.approval_message_id
+            self.state = State.WAITING_USER_REPLY
+            self.pending = ReplyPending()
+            return ClearOrphanedApproval(approval_message_id=mid)
+        return None
 
     def on_end(self) -> None:
         self.state = State.ENDED

@@ -1,6 +1,7 @@
 from claude_tg.session_state import (
     SessionState, State, ApprovalPending, ReplyPending, DenyReasonPending,
     ResolveApproval, ResolveReply, ResolveDenyReason, Reject, Ignore,
+    ClearOrphanedApproval,
 )
 
 
@@ -115,12 +116,45 @@ def test_unknown_callback_kind_is_ignored():
     assert s.state == State.WAITING_TOOL_APPROVAL
 
 
-def test_turn_end_is_noop_outside_running():
+def test_turn_end_in_running_returns_none():
+    s = SessionState()
+    assert s.on_turn_end() is None
+    assert s.state == State.WAITING_USER_REPLY
+
+
+def test_turn_end_in_ended_returns_none():
+    s = SessionState()
+    s.on_end()
+    assert s.on_turn_end() is None
+    assert s.state == State.ENDED
+
+
+def test_turn_end_while_waiting_approval_clears_stuck_state():
+    # Regression: if Claude's hook timed out / was killed, Claude proceeds and
+    # emits TurnEnd while the wrapper still believes an approval is pending.
+    # TurnEnd must unstick the state so the user can reply.
     s = SessionState()
     s.on_pre_tool_use(approval_message_id=100)
     assert s.state == State.WAITING_TOOL_APPROVAL
-    s.on_turn_end()
-    assert s.state == State.WAITING_TOOL_APPROVAL  # unchanged
+    action = s.on_turn_end()
+    assert isinstance(action, ClearOrphanedApproval)
+    assert action.approval_message_id == 100
+    assert s.state == State.WAITING_USER_REPLY
+    assert isinstance(s.pending, ReplyPending)
+    # And now a user text is accepted, not rejected as "approval pending".
+    reply = s.on_text(user_id=1, text="hi")
+    assert isinstance(reply, ResolveReply)
+
+
+def test_turn_end_while_waiting_deny_reason_clears_stuck_state():
+    s = SessionState()
+    s.on_pre_tool_use(approval_message_id=100)
+    s.on_callback(approval_message_id=100, kind="deny_tell")
+    assert s.state == State.WAITING_DENY_REASON
+    action = s.on_turn_end()
+    assert isinstance(action, ClearOrphanedApproval)
+    assert action.approval_message_id == 100
+    assert s.state == State.WAITING_USER_REPLY
 
 
 def test_cancel_in_waiting_user_reply_is_rejected():

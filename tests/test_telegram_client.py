@@ -74,11 +74,12 @@ async def test_post_message_empty_string_is_noop(fake):
 async def test_post_approval_has_callback_data_with_expected_suffixes(fake):
     f, base = fake
     client = TelegramClient(token="TOKEN", supergroup_id=-100, base_url=base)
-    mid = await client.post_approval(
+    mid, card_text = await client.post_approval(
         topic_id=50, tool_name="Bash", preview="ls",
     )
     # First call: sendMessage with placeholder keyboard.
     assert f.calls[0][0] == "sendMessage"
+    assert card_text == f.calls[0][1]["text"]
     # Second call: editMessageReplyMarkup with real callback_data keyed by mid.
     assert f.calls[1][0] == "editMessageReplyMarkup"
     assert f.calls[1][1]["message_id"] == mid

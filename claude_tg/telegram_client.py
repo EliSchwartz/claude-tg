@@ -116,10 +116,13 @@ class TelegramClient:
         topic_id: int,
         tool_name: str,
         preview: str,
-    ) -> int:
+    ) -> tuple[int, str]:
         """Post an approval card with an inline keyboard whose callback_data
         uses the returned message_id as the prefix. This guarantees callbacks
         can be routed back to the right pending request.
+
+        Returns (message_id, card_text) so the caller can later edit the card
+        to show the resolved decision.
 
         Text is sent as plain text (no parse_mode) because tool input previews
         may contain arbitrary characters including backticks.
@@ -150,7 +153,7 @@ class TelegramClient:
             message_id=message_id,
             reply_markup=real_kb,
         )
-        return message_id
+        return message_id, text
 
     async def react(self, message_id: int, emoji: str) -> None:
         await self._call_soft(
@@ -160,13 +163,24 @@ class TelegramClient:
             reaction=[{"type": "emoji", "emoji": emoji}],
         )
 
-    async def edit_message_text(self, message_id: int, text: str) -> None:
-        await self._call_soft(
-            "editMessageText",
-            chat_id=self._supergroup_id,
-            message_id=message_id,
-            text=text,
-        )
+    async def edit_message_text(
+        self,
+        message_id: int,
+        text: str,
+        *,
+        strip_keyboard: bool = False,
+    ) -> None:
+        kwargs: dict[str, Any] = {
+            "chat_id": self._supergroup_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        if strip_keyboard:
+            # Passing an empty inline_keyboard removes the buttons in the
+            # same RPC as the text edit, so the user never sees a stale
+            # button briefly during the resolve.
+            kwargs["reply_markup"] = {"inline_keyboard": []}
+        await self._call_soft("editMessageText", **kwargs)
 
     async def set_topic_name(self, topic_id: int, name: str) -> None:
         await self._call_soft(
