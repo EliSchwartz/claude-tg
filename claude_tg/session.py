@@ -30,6 +30,38 @@ from claude_tg.telegram_client import (
 log = logging.getLogger("claude_tg.session")
 
 
+# Tools auto-approved before the PreToolUse hook fires. These are read-only
+# or research-only and have no side effects on the local system. Listing them
+# in permissions.allow short-circuits Claude Code's permission flow so the
+# remote human is never pestered about them.
+DEFAULT_ALLOW_TOOLS = (
+    "Read",
+    "Grep",
+    "Glob",
+    "WebSearch",
+    "WebFetch",
+    "NotebookRead",
+)
+
+
+def build_settings_dict(hook_cmd: str) -> dict:
+    """Compose the contents of the settings.json claude-tg passes to claude
+    via --settings. Pure function so it can be unit-tested without spawning
+    a subprocess."""
+    return {
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": hook_cmd}],
+            }],
+        },
+        "permissions": {
+            "defaultMode": "default",
+            "allow": list(DEFAULT_ALLOW_TOOLS),
+        },
+    }
+
+
 class Session:
     def __init__(
         self,
@@ -125,15 +157,7 @@ class Session:
         self._temp_dir = td
         settings_path = td / "settings.json"
         hook_cmd = f"{shutil.which('claude-tg-hook') or sys.executable + ' -m claude_tg.hook_script'} {self.socket_path} pre_tool_use"
-        settings_path.write_text(json.dumps({
-            "hooks": {
-                "PreToolUse": [{
-                    "matcher": "*",
-                    "hooks": [{"type": "command", "command": hook_cmd}],
-                }],
-            },
-            "permissions": {"defaultMode": "default"},
-        }))
+        settings_path.write_text(json.dumps(build_settings_dict(hook_cmd)))
 
         argv = list(self.claude_argv)
         # Only real `claude` gets --settings / stream-json flags; stub subprocess

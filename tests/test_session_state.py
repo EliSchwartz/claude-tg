@@ -173,3 +173,24 @@ def test_cancel_in_ended_is_rejected():
     # ENDED should never emit actions that cause side effects; Reject is acceptable
     # because the orchestrator will just ignore the state machine's output anyway.
     assert isinstance(action, (Reject, Ignore))
+
+
+def test_build_settings_dict_includes_readonly_allowlist():
+    from claude_tg.session import build_settings_dict
+    settings = build_settings_dict(hook_cmd="/bin/true sock pre_tool_use")
+    allow = settings["permissions"]["allow"]
+    # Read-only and web-research tools should be auto-approved before the
+    # hook ever fires, so the human is not pestered for routine queries.
+    for tool in ("Read", "Grep", "Glob", "WebSearch", "WebFetch", "NotebookRead"):
+        assert tool in allow, f"expected {tool} in permissions.allow; got {allow}"
+    # Sanity: write/exec tools are NOT in the allow list.
+    for tool in ("Write", "Edit", "Bash", "NotebookEdit"):
+        assert tool not in allow, (
+            f"{tool} must require approval; should not be in permissions.allow"
+        )
+    # Hook is still installed for non-allowlisted tools.
+    pre = settings["hooks"]["PreToolUse"]
+    assert pre[0]["matcher"] == "*"
+    assert pre[0]["hooks"][0]["command"] == "/bin/true sock pre_tool_use"
+    # defaultMode preserved.
+    assert settings["permissions"]["defaultMode"] == "default"
